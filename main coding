@@ -1,0 +1,122 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import adfuller
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.stattools import acf, pacf
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+'''
+bb = pd.read_excel('Billability.xlsx', skiprows=7)
+
+# print(list(bb.columns))
+
+bb_week = bb.groupby(
+    by='Week Posted Date'
+).aggregate({
+    'Theoretical Capacity (Total)':'sum',
+    'Gross Client Time Charges':'sum',
+    'Employee ID T&B':'count'
+}).reset_index()
+
+bb_week['Billability'] = bb_week['Gross Client Time Charges']/bb_week['Theoretical Capacity (Total)']
+
+bb_week.to_excel('bb_week.xlsx')
+'''
+
+
+bb_ts = pd.read_excel('bb_week.xlsx')
+print(bb_ts.head())
+
+bb_ts['Week Posted Date'] = pd.to_datetime(bb_ts['Week Posted Date'])
+bb_ts.set_index('Week Posted Date', inplace=True)
+
+decomposition = seasonal_decompose(bb_ts['Billability'], model='additive', period=52)
+trend = decomposition.trend
+seasonal = decomposition.seasonal
+residual = decomposition.resid
+
+plt.figure(figsize=(12,8))
+plt.subplot(411)
+plt.plot(bb_ts['Billability'], label='Original')
+plt.legend(loc='best')
+plt.subplot(412)
+plt.plot(trend, label='Trend')
+plt.legend(loc='best')
+plt.subplot(413)
+plt.plot(seasonal,label='Seasonality')
+plt.legend(loc='best')
+plt.subplot(414)
+plt.plot(residual, label='Residuals')
+plt.legend(loc='best')
+plt.tight_layout()
+plt.show()
+
+ts = bb_ts['Billability']
+fig, ax = plt.subplots(figsize=(12, 5))
+plot_acf(ts, ax=ax)
+plt.show()
+
+
+scaler = MinMaxScaler()
+bb_ts['Employee ID T&B'] = scaler.fit_transform(bb_ts[['Employee ID T&B']])
+
+train_data = bb_ts.loc[:'2022-11-26']
+test_data = bb_ts.loc['2022-12-03':]
+
+def test_stationarity(data):
+    result = adfuller(data)
+    print('ADF Statistic: %f' % result[0])
+    print('p-value: %f' % result[1])
+
+
+test_stationarity(train_data['Billability'])
+
+
+diff = train_data['Billability'].diff(2)
+diff.dropna(inplace=True)
+
+test_stationarity(diff)
+
+fig, ax = plt.subplots(figsize=(12, 5))
+plot_acf(diff, ax=ax)
+plt.show()
+
+exog = train_data['Employee ID T&B']
+
+merged_data = pd.concat([diff, exog], axis=1)
+
+# 训练ARIMA模型
+model = ARIMA(endog=train_data['Billability'],
+              exog=train_data['Employee ID T&B'],
+              order=(1, 0, 1))
+model_fit = model.fit()
+
+model_fit = model.fit()
+
+# 预测测试集数据
+predict_ts = model_fit.predict(start='2022-12-03',
+                                end='2023-03-25',
+                               exog=test_data['Employee ID T&B'])
+
+
+# 可视化预测结果
+plt.figure(figsize=(12,6))
+plt.plot(train_data.index, train_data['Billability'], label='Training Data')
+plt.plot(test_data.index, test_data['Billability'], label='Testing Data')
+plt.plot(predict_ts.index, predict_ts, label='Predictions')
+plt.title('ARIMA Model Predictions')
+plt.xlabel('Week Posted Date')
+plt.ylabel('Billability')
+plt.legend()
+plt.show()
+
+# 计算预测误差
+mse = mean_squared_error(test_data['Billability'], predict_ts)
+rmse = np.sqrt(mse)
+print('RMSE: %.3f' % rmse)
+
